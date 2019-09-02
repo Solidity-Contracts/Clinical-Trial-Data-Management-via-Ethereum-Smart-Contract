@@ -1,0 +1,338 @@
+pragma solidity ^0.4.0;
+
+contract MonitorCT{
+   
+    //addresses of stakeholders involved in the CT
+    address FDA = 0xca35b7d915458ef540ade6068dfe2f44e8fa733c;
+    address IRB = 0x14723a09acff6d2a60dcdf7aa4aff308fddc160c;
+    address sponsor = 0x4b0897b0513fdc7c541b6d9d7e929c4e5364d2db;
+    address PI = 0x583031d1113ad414f02576bd6afabfb302140225;
+    address physician = 0xdd870fa1b7c4700f2bd7f44238821c26f7392148;
+    address medical_lab_scientist = 0x3d6f801d797a088cf5edb703bbaa19a64414b006;
+    address [] patientID; 
+    
+    //1. variables needed for the IND applicaion stage
+    string INDAppHash;
+    uint TrialPhase;
+    uint TrialNumber; //unique trial number given to submitted IND app
+    bool INDAppApproved;
+    
+    //2. variables needed for the clinical initiation stage
+    uint CTStartDate; //dates will be in the form 0000 to represent month & year respectively. For example: Jan 2007 = 010
+    uint CTCompletionDate; // Extra NOTE: must create a condition such that completion date is always greater than start date
+    uint NumberOfPatients;//patient sample size
+    string CTProtocolHash; //hashed Clinical Trial protocol document also includes the inclusion-exclusion criteria as well
+    string SOPHash; //hashed Standard Operating Procedure document
+    string PI_CVHash; //hashed Pricipal Investigator's CV document
+    bool ClinicalInitiationApproved;
+    uint MaxAge; // CT may have a max age where volunteers could participate
+    bool PatientNotHealthy; //CT may only accept volunteers who are not healthy
+    
+    //3. variables needed for the enrollment stage
+    // myStruct for patient details 
+   struct myStruct {
+       uint age; 
+       bool NotHealthy; //CT may not accept healthy volunteers
+       bool GiventInformedConsent; //patient must give their informed GiventInformedConsent
+       string InformedConsentHash; //hashed file of patient's informed consent document
+       bool GivenMedicalHistory; //patient must prvide their medical history to satisfy inclusion-exclusion criteria
+       string MedicalHistoryHash; //hashed file of patient's medical history
+        bool PatientDropped;
+   }
+   
+   mapping (address => myStruct) PatientEnroll;
+   
+   uint NoPatientsEnrolled=0;
+
+    //4. variables needed for the monitoring stage
+    // myStruct1 for patient monitoring
+    struct myStruct1 {
+        string CRFHash;
+        string PatientFollowUpHash;
+        string LabResultsHash;
+    }
+    
+    mapping (address => myStruct1[]) PatientMonitor;
+    
+    //5. variables needed for the SAE stage
+    string SAEHash;
+    
+    //6. variables needed for the report analysis stage
+    string FinalCTReportHash;
+    
+    // restrictions on making changes during the CT process
+    modifier onlySponsor() {
+        if (msg.sender == sponsor)
+        _;
+        else throw;
+    }
+    
+    modifier onlyFDA() {
+        if (msg.sender == FDA)
+        _;
+        else throw;
+    }
+    
+    modifier onlyPI() {                     // for enrolling physicians and reporting SAE
+        if (msg.sender == PI)
+        _;
+        else throw;
+    }
+    
+    modifier onlyPhysician() {                     // for enrollment stage
+        if (msg.sender == physician)
+        _;
+        else throw;
+    }
+    
+    modifier onlyPhyicianLabScientist() {        // for monitoring stage
+        if (msg.sender == physician || msg.sender == medical_lab_scientist)
+        _;
+        else throw;
+    }
+    
+    modifier onlyIRB() {                     // for SAE stage
+        if (msg.sender == IRB)
+        _;
+        else throw;
+    }
+    
+    // to make the functions go in a sequential order
+    bool INDAppStageComplete;
+    bool INDAppStageCompletedFDA;
+    
+    bool CTInitiaionComplete;
+    bool CTInitiationCompletedFDA;
+    
+    bool EnrollmentComplete; 
+    
+    bool MonitoringCompleted;
+    
+    bool SAEOccurred;
+    bool SAEComplete;
+    bool SAEApproved;
+    bool SAEResolved;
+    
+    bool ReportingComplete;
+    bool CTApproved;
+
+
+    // events: to annouce the information to the network
+    event IND(string);
+    event INDstage(string);
+    event FDARejectIND(string);
+    
+    event CTIni(string);
+    event CTInistage(string);
+    event FDARejectCTInitiation(string);
+    
+    event Enrolling(string enrollpatient, address);
+    event EnrollStage(string);
+    
+    event NoSAE(string);
+    event SAEDecision(string);
+    event SAENotResolved(string);
+    
+    event PatientDroppedOut(string drop_patient, address droppedpatient);
+    event ReportingIncompleteStage(string ReportingStageIncomplete);
+    
+    event PatientDropped(string);
+    event MonitorIncomplete (string);
+    event CTFinal(string CTFinal);
+   
+     
+    //1. IND applicaion stage
+    function INDRequestedBySponsor ( uint _TrialPhase, uint _TrialNumber, string _INDAppHash, 
+                                                      bool _INDAppStageComplete) onlySponsor {
+        TrialPhase = _TrialPhase;
+        TrialNumber = _TrialNumber;  
+        INDAppHash = _INDAppHash;
+       INDAppStageComplete = _INDAppStageComplete;
+    }
+    
+    function SetINDApproval(bool _INDAppApproved) onlyFDA {
+        if (INDAppStageComplete) {
+        INDAppApproved = _INDAppApproved;
+          if (INDAppApproved)
+                IND("The Investigational New Drug application has been approved by the FDA");
+          else 
+                IND("The Investigational New Drug application has been rejected by the FDA");
+        }
+        else 
+               INDstage("The Investigational New Drug application stage hasn't been completed by sponsor");
+               
+        INDAppStageCompletedFDA = INDAppApproved;
+    }
+
+    
+    //2. Clinical initiation stage
+    function ClinicalInitiationBySponsor (uint _CTStartDate, uint _CTCompletionDate, uint _NumberOfPatients, 
+                                          string _CTProtocolHash, string _SOPHash, string _PI_CVHash, uint _MaxAge, 
+                                          bool _PatientNotHealthy, bool _CTInitiaionComplete) onlySponsor {
+       if (INDAppStageCompletedFDA){
+        CTStartDate = _CTStartDate;
+        CTCompletionDate = _CTCompletionDate;
+        NumberOfPatients = _NumberOfPatients;
+        CTProtocolHash = _CTProtocolHash;
+        SOPHash = _SOPHash;
+        PI_CVHash = _PI_CVHash;
+        MaxAge = _MaxAge;
+        PatientNotHealthy= _PatientNotHealthy;
+        CTInitiaionComplete = _CTInitiaionComplete;
+       }
+       
+      else FDARejectIND("FDA hasnt approved of the IND Stage");
+    }
+    
+    function SetClinicalInitiationDecision (bool _ClinicalInitiationApproved) onlyFDA {
+        if (CTInitiaionComplete) {
+        ClinicalInitiationApproved = _ClinicalInitiationApproved;
+          if (ClinicalInitiationApproved)
+              CTIni("The clinical initiation request has been approved by the FDA");
+          else
+              CTIni("The clinical initiation request has been rejected by the FDA");
+        }
+        else  CTInistage("The clinical initiation stage hasn't been completed by sponsor");
+        
+        CTInitiationCompletedFDA = ClinicalInitiationApproved;
+    }
+    
+    
+     //3. Enrollment stage
+    function PatientEnrollment (address _patientID, uint _age,bool _NotHealthy,bool _GiventInformedConsent, 
+                                string _InformedConsentHash,bool _GivenMedicalHistory,string _MedicalHistoryHash) onlyPhysician {
+        if (CTInitiationCompletedFDA) {
+            
+        PatientEnroll[_patientID].age = _age;
+        PatientEnroll[_patientID].NotHealthy = _NotHealthy;
+        PatientEnroll[_patientID].GiventInformedConsent = _GiventInformedConsent;
+        PatientEnroll[_patientID].InformedConsentHash = _InformedConsentHash;
+        PatientEnroll[_patientID].GivenMedicalHistory = _GivenMedicalHistory;
+        PatientEnroll[_patientID].MedicalHistoryHash = _MedicalHistoryHash;
+        PatientEnroll[_patientID].PatientDropped=false;
+        
+        
+        patientID.push(_patientID) -1;
+        NoPatientsEnrolled++;
+
+        Enrolling ("New patient has been successfully enrolled into the trial with a patient ID:", _patientID);
+        
+        }
+        else FDARejectCTInitiation("FDA hasnt approved of the CT Initiation Stage so enrolling patients isn't allowed");
+    }
+    
+    function GetPatientInfo() constant returns (address[]) {
+        return patientID;
+    }
+
+    function GetPatientDetails(address PatientID) constant returns (uint, bool, bool, string, bool, string){
+        return(PatientEnroll[PatientID].age,PatientEnroll[PatientID].NotHealthy,PatientEnroll[PatientID].GiventInformedConsent,
+               PatientEnroll[PatientID].InformedConsentHash,PatientEnroll[PatientID].GivenMedicalHistory,
+               PatientEnroll[PatientID].MedicalHistoryHash);
+    }
+    
+    function CountPatients() constant returns (uint){
+        return NoPatientsEnrolled;
+    }
+    
+    function EnrollmentStageCompleted(bool _EnrollmentComplete) onlyPhysician {
+      EnrollmentComplete = _EnrollmentComplete;
+        if (EnrollmentComplete) {
+            if (NoPatientsEnrolled >= NumberOfPatients)
+                EnrollStage ("Enrollment stage is successfully completed and new patients are no longer allowed to join the CT");
+                else 
+                {
+                    EnrollmentComplete == false;
+                    EnrollStage("Enrollment stage isn't successfully completed as the minimum number of patients hasn't been achieved");
+                }
+        }
+        
+        else EnrollStage("Enrollment stage isn't completed");  
+    }
+    
+    
+    //4. Monitoring stage 
+   function MonitoringStage (address _patientID, string _CRFHash,string _PatientFollowUpHash,string _LabResultsHash,
+                             bool _SAEOccurred, bool _MonitoringCompleted) onlyPhyicianLabScientist {
+    if ((EnrollmentComplete && !PatientEnroll[_patientID].PatientDropped) || SAEResolved) {
+        
+        PatientMonitor[_patientID].push(myStruct1(_CRFHash,_PatientFollowUpHash,_LabResultsHash));
+
+        SAEOccurred = _SAEOccurred; 
+         
+        MonitoringCompleted = _MonitoringCompleted;
+     }
+     else if (!EnrollmentComplete)
+     EnrollStage("Enrollment stage isn't completed");
+     else if (PatientEnroll[_patientID].PatientDropped)
+     PatientDropped("Patient dropped out so further monitoring is not permissible");
+     else if (!SAEResolved)
+     SAENotResolved("SAE reporting hasn't been approved by the IRB so further monitoring is on halt"); 
+     
+   }
+   
+   
+    function GetPatientMonitoringDetailPerVisit(address PatientID, uint Visit_number) constant returns (string, string, string){
+            myStruct1 memory MonitoringDetails = PatientMonitor[PatientID][Visit_number];
+            return(MonitoringDetails.CRFHash,MonitoringDetails.PatientFollowUpHash,MonitoringDetails.LabResultsHash);
+    }
+    
+ 
+    function dropPatient(address _PatientID) onlyPhysician {
+        PatientEnroll[_PatientID].PatientDropped=true;
+        uint index;
+        for(uint i=0; i<patientID.length; i++){
+            if(patientID[i]==_PatientID){
+                            index=i;
+                            break;
+            }
+        }
+             delete patientID[index];
+             NoPatientsEnrolled--;
+             PatientDroppedOut ("Patient has been successfully dropped out of the trial with a patient ID:", _PatientID);
+    }
+    
+    
+   //5. SAE stage (if it happens)
+    function SetSAEStage(string _SAEHash, bool _SAEComplete) onlyPI {
+       if (SAEOccurred){
+        SAEHash = _SAEHash;
+        SAEComplete = _SAEComplete;
+       }
+        else NoSAE ("No SAE occurrence has been notified during the CT monitoring stage");
+    }
+    
+    function SAEApproval (bool _SAEApproved) onlyIRB {
+        if (SAEComplete){
+        SAEApproved = _SAEApproved;
+        if (SAEApproved)
+             SAEDecision("The SAE reporting has been approved by the IRB");
+          else
+             SAEDecision("The SAE reporting has been rejected by the IRB");
+         }
+         else SAEDecision("In occurrence of an SAE then this stage isn't completed by the PI");
+         
+         SAEResolved = SAEApproved;
+    }
+    
+        
+    //6. Report analysis stage
+    function ReportAnalysisStage (string _FinalCTReportHash, bool _ReportingComplete) onlySponsor {
+        if (MonitoringCompleted)
+        FinalCTReportHash = _FinalCTReportHash;   
+        else MonitorIncomplete("The Monitoring stage hasn't been completed");
+        ReportingComplete = _ReportingComplete;
+    }
+    
+    function SetCTDecision (bool _CTApproved) onlyFDA {
+        if (ReportingComplete){
+        CTApproved = _CTApproved;
+          if (CTApproved)
+             CTFinal("The final clinical trial outcome has been approved by the FDA");
+          else
+             CTFinal("The final clinical trial outcome has been rejected by the FDA");
+        }
+        else ReportingIncompleteStage("The clinical reporting stage hasn't been completed by sponsor");
+    }
+    
+}
